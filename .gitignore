@@ -61,3 +61,7 @@ target/
 
 # vim temporary files
 .*.swp
+
+# Nix
+result
+.direnv/

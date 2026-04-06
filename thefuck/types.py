@@ -1,5 +1,7 @@
 import os
+import subprocess
 import sys
+from .shells import Nushell
 from . import logs
 from .shells import shell
 from .conf import settings, load_source
@@ -258,4 +260,10 @@ class CorrectedCommand(object):
         logs.debug(u'PYTHONIOENCODING: {}'.format(
             os.environ.get('PYTHONIOENCODING', '!!not-set!!')))
 
-        sys.stdout.write(self._get_script())
+        script = self._get_script()
+        if isinstance(shell, Nushell):
+            # TODO: fix for better option, the lack of '-l' flag
+            # means we lose any ENV that could be needed
+            subprocess.run(["nu", "-c", script])
+        else:
+            sys.stdout.write(script)
