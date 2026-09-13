@@ -7,6 +7,8 @@ from ..conf import settings
 from ..corrector import get_corrected_commands
 from ..exceptions import EmptyCommand
 from ..learned import get_correction, guess_from_path, record
+from ..resolvers.help_resolver import get_help_correction
+from ..resolvers.history_resolver import get_history_correction
 from ..ui import select_command
 from ..utils import get_alias, get_all_executables
 
@@ -42,9 +44,21 @@ def fix_command(known_args):
 
         learned_script = get_correction(command.script)
         if not learned_script:
+            learned_script = get_history_correction(command)
+            if learned_script:
+                logs.debug("Corrected from history: {}".format(
+                    learned_script))
+                record(command.script, learned_script)
+        if not learned_script:
             learned_script = guess_from_path(command.script)
             if learned_script:
                 logs.debug("Guessed correction from $PATH: {}".format(
+                    learned_script))
+                record(command.script, learned_script)
+        if not learned_script:
+            learned_script = get_help_correction(command.script)
+            if learned_script:
+                logs.debug("Corrected from binary help: {}".format(
                     learned_script))
                 record(command.script, learned_script)
         if learned_script:
