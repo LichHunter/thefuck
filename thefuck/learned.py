@@ -4,7 +4,7 @@ import shelve
 import time
 from difflib import get_close_matches
 
-from . import logs, shell_ast
+from . import logs, shell_ast, typo
 from .utils import get_all_executables, which
 
 try:
@@ -164,12 +164,19 @@ class LearnedCorrections(object):
                 token = token[1:-1]
             if not token or '/' in token or '.' in token or which(token):
                 continue
-            candidates = [cmd for cmd in get_close_matches(
-                token, get_all_executables(), n=5, cutoff=GUESS_CUTOFF)
-                if cmd.startswith(token[0])]
+            executables = get_all_executables()
+            # The ratio cutoff underrates transpositions (gti -> git
+            # at 0.667), so same-first-char single edits join the
+            # difflib candidates; exactly one distinct survivor wins.
+            candidates = set(cmd for cmd in get_close_matches(
+                token, executables, n=5, cutoff=GUESS_CUTOFF)
+                if cmd.startswith(token[0]))
+            candidates.update(cmd for cmd in executables
+                              if cmd[:1] == token[:1]
+                              and typo.single_edit(token, cmd))
             if len(candidates) != 1:
                 continue
-            replacements.append((start, end, candidates[0]))
+            replacements.append((start, end, candidates.pop()))
         if not replacements:
             return None
         return shell_ast.splice(script, replacements)

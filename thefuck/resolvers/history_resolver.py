@@ -7,7 +7,7 @@ existing `history` rule keeps offering choices instead of auto-running.
 """
 import difflib
 
-from thefuck import shell_ast
+from thefuck import shell_ast, typo
 from thefuck.utils import get_valid_history_without_current
 
 _PREFILTER_CUTOFF = 0.5
@@ -57,12 +57,27 @@ def _prefilter(script, history):
     return [line for _, line in scored[:_CANDIDATES]]
 
 
+def _similar(token, candidate_token):
+    """Returns True when a diverged token pair passes the similarity gate.
+
+    The ratio cutoff accepts substitutions; `single_edit` adds the
+    adjacent transpositions the ratio underrates (psuh -> push at
+    0.75) while keeping every two-edit pair out. The first-char
+    equality keeps the single-edit path as narrow as the typo
+    intent: a slipped key, not a different word.
+    """
+    return (difflib.SequenceMatcher(
+        None, token, candidate_token).ratio() >= _TOKEN_CUTOFF
+        or (token[:1] == candidate_token[:1]
+            and typo.single_edit(token, candidate_token)))
+
+
 def _correct(script, segments, candidate):
     """Returns the spliced correction when candidate passes every gate.
 
     The gates: identical segment and per-segment token counts, at
-    most `_MAX_DIVERGED` diverged tokens, every diverged pair at
-    least `_TOKEN_CUTOFF` similar, and a candidate different from
+    most `_MAX_DIVERGED` diverged tokens, every diverged pair
+    similar enough (see `_similar`), and a candidate different from
     the script itself.
     """
     if candidate == script:
@@ -82,8 +97,7 @@ def _correct(script, segments, candidate):
                 continue
             if len(replacements) >= _MAX_DIVERGED:
                 return None
-            if difflib.SequenceMatcher(
-                    None, token, candidate_token).ratio() < _TOKEN_CUTOFF:
+            if not _similar(token, candidate_token):
                 return None
             replacements.append((start, end, candidate_token))
     if not replacements:

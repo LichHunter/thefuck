@@ -180,6 +180,22 @@ class TestGuessFromPathSegments(object):
         assert (learned.guess_from_path('gi psuh | gre -i foo')
                 == 'git psuh | grep -i foo')
 
+    def test_fixes_single_edit_typos_under_cutoff(self, learned,
+                                                  path_bins):
+        # gti -> git scores 2 * 2 / 6 = 0.667 and greo -> grep scores
+        # 2 * 3 / 8 = 0.75, both under GUESS_CUTOFF; each is still a
+        # first-char-equal single edit with one executable match.
+        path_bins(executables=['git', 'grep', 'sed'])
+        assert (learned.guess_from_path('gti psuh | greo -i foo')
+                == 'git psuh | grep -i foo')
+
+    def test_declines_single_edit_ambiguity(self, learned, path_bins):
+        # gti is one edit from both git (transposition) and gui
+        # (substitution), each scoring 2 * 2 / 6 = 0.667, so two
+        # candidates survive and the segment is skipped.
+        path_bins(executables=['git', 'gui'])
+        assert learned.guess_from_path('gti psuh') is None
+
     def test_fixes_only_segment_with_unknown_head(self, learned, path_bins):
         path_bins(executables=['git', 'grep', 'sed'], existing=['git'])
         assert (learned.guess_from_path('git psuh | gre -i foo')

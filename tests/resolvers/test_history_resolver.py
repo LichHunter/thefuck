@@ -2,7 +2,7 @@ import difflib
 
 import pytest
 
-from thefuck import shell_ast
+from thefuck import shell_ast, typo
 from thefuck.resolvers.history_resolver import (
     _CANDIDATES,
     _TOKEN_CUTOFF,
@@ -42,20 +42,26 @@ def test_corrects_two_diverged_tokens_across_segments(history):
     assert get_history_correction(command) == 'git status | grep -i foo'
 
 
-def test_declines_tokens_below_cutoff(history):
-    # The plan's flagship pair lands under the mandated token cutoff:
-    # SequenceMatcher(None, 'psuh', 'push').ratio() == 0.75 and
-    # SequenceMatcher(None, 'greo', 'grep').ratio() == 0.75, both
-    # below _TOKEN_CUTOFF, so the safety gate must decline them.
+@requires_ast
+def test_corrects_transposed_tokens_under_ratio_cutoff(history):
+    # psuh -> push and greo -> grep both score 2 * 3 / 8 = 0.75,
+    # under _TOKEN_CUTOFF, but each is a first-char-equal single
+    # transposition, which the token gate accepts alongside the
+    # ratio.
     history(['git push | grep -i foo'])
     command = Command('git psuh | greo -i foo', '')
-    assert get_history_correction(command) is None
+    assert get_history_correction(command) == 'git push | grep -i foo'
 
 
 def test_declines_token_just_below_cutoff(history):
+    # '--ignore-whitespaces' vs '--ignore-all-spaces' scores
+    # 2 * 15 / 39 = 0.769 (under _TOKEN_CUTOFF) AND spans two edits
+    # (pinned below), so even the amended single-edit gate declines.
     history(['git diff --ignore-all-spaces HEAD'])
     command = Command('git diff --ignore-whitespaces HEAD', '')
     assert get_history_correction(command) is None
+    assert not typo.single_edit('--ignore-whitespaces',
+                                '--ignore-all-spaces')
 
 
 def test_token_cutoff_boundary_arithmetic():
@@ -115,13 +121,15 @@ def test_declines_when_history_is_only_unparseable(history):
     assert get_history_correction(command) is None
 
 
-def test_flat_mode_declines_multi_segment_scripts(history, monkeypatch):
-    # With the parser unavailable the pipeline cannot be verified
-    # structurally and both diverged tokens fall under the cutoff.
+def test_flat_mode_corrects_single_edit_tokens(history, monkeypatch):
+    # With the parser unavailable both scripts take the flat view;
+    # token counts still line up and both diverged tokens are
+    # first-char-equal single edits, so the amended gate corrects
+    # them there too.
     monkeypatch.setattr(shell_ast, 'AST_AVAILABLE', False)
     history(['git push | grep -i foo'])
     command = Command('git psuh | greo -i foo', '')
-    assert get_history_correction(command) is None
+    assert get_history_correction(command) == 'git push | grep -i foo'
 
 
 def test_declines_history_below_prefilter_cutoff(history):
