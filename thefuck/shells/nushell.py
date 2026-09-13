@@ -1,8 +1,10 @@
 from subprocess import Popen, PIPE
+import io
 import os
 import six
 import sys
 from .. import logs
+from ..conf import settings
 from ..utils import DEVNULL
 from .generic import Generic
 
@@ -31,7 +33,44 @@ class Nushell(Generic):
         return os.path.expanduser('~/.config/nushell/history.txt')
 
     def _get_history_line(self, command_script):
-        return command_script
+        return u'{}\n'.format(command_script)
+
+    def _get_history_lines(self):
+        """Returns list of history entries."""
+        history_file_name = self._get_history_file_name()
+        if os.path.isfile(history_file_name):
+            with io.open(history_file_name, 'r',
+                         encoding='utf-8', errors='ignore') as history_file:
+
+                lines = history_file.readlines()
+                if settings.history_limit:
+                    lines = lines[-settings.history_limit:]
+
+                for line in self._join_continuations(lines):
+                    prepared = self._script_from_history(line) \
+                        .strip()
+                    if prepared:
+                        yield prepared
+
+    def _join_continuations(self, lines):
+        """Joins lines ending with a backslash with the next line.
+
+        Nushell escapes multiline commands in its plaintext history
+        with a backslash at the end of each continued line.
+
+        """
+        joined = []
+        pending = u''
+        for line in lines:
+            stripped = line.rstrip()
+            if stripped.endswith('\\'):
+                pending += stripped[:-1].rstrip() + u' '
+            else:
+                joined.append(pending + line)
+                pending = u''
+        if pending:
+            joined.append(pending)
+        return joined
 
     def and_(self, *commands):
         return u' and '.join(commands)
