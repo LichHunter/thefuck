@@ -10,6 +10,7 @@ dependencies = [
   "six",
   "decorator",
   "pyte",
+  "bashlex==0.18",
 ]
 
 [project.scripts]
