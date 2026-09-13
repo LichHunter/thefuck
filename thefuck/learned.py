@@ -4,7 +4,7 @@ import shelve
 import time
 from difflib import get_close_matches
 
-from . import logs
+from . import logs, shell_ast
 from .utils import get_all_executables, which
 
 try:
@@ -144,29 +144,35 @@ class LearnedCorrections(object):
 
     def guess_from_path(self, script):
         """Guesses what the user meant by fuzzy-matching a mistyped
-        token against executables from $PATH and shell aliases.
+        command token against executables from $PATH and shell aliases,
+        for the head of every pipeline segment, so a typo after a pipe
+        is fixed as reliably as a leading one.
 
-        Returns the corrected script only when exactly one unambiguous
-        close match exists, so asking the user stays the last resort.
+        Returns the corrected script only when at least one segment
+        has exactly one unambiguous close match, so asking the user
+        stays the last resort.
         """
-        parts = script.split()
-        if not parts:
+        replacements = []
+        for segment in shell_ast.parse(script):
+            words = segment.words
+            index = 1 if words[0][0] == 'sudo' and len(words) > 1 else 0
+            token, start, end = words[index]
+            # Raw spans keep their quotes; the gates must see the typed
+            # word while the whole quoted span is replaced below.
+            if (len(token) > 1 and token[0] == token[-1]
+                    and token[0] in ('"', "'")):
+                token = token[1:-1]
+            if not token or '/' in token or '.' in token or which(token):
+                continue
+            candidates = [cmd for cmd in get_close_matches(
+                token, get_all_executables(), n=5, cutoff=GUESS_CUTOFF)
+                if cmd.startswith(token[0])]
+            if len(candidates) != 1:
+                continue
+            replacements.append((start, end, candidates[0]))
+        if not replacements:
             return None
-
-        index = 1 if len(parts) > 1 and parts[0] == 'sudo' else 0
-        token = parts[index]
-        if '/' in token or '.' in token or which(token):
-            return None
-
-        candidates = [cmd for cmd in get_close_matches(
-            token, get_all_executables(), n=5, cutoff=GUESS_CUTOFF)
-            if cmd.startswith(token[0])]
-        if len(candidates) != 1:
-            return None
-
-        corrected_parts = list(parts)
-        corrected_parts[index] = candidates[0]
-        return ' '.join(corrected_parts)
+        return shell_ast.splice(script, replacements)
 
     def clear(self):
         db = self.db

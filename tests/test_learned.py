@@ -1,4 +1,6 @@
 import pytest
+
+from thefuck import shell_ast
 from thefuck.learned import LearnedCorrections
 
 
@@ -158,6 +160,63 @@ class TestGuessFromPath(object):
     def test_returns_none_for_empty_script(self, learned, path_bins):
         path_bins(executables=['git'])
         assert learned.guess_from_path('') is None
+
+
+class TestGuessFromPathSegments(object):
+    pytestmark = pytest.mark.skipif(
+        not shell_ast.AST_AVAILABLE, reason='bashlex required')
+
+    @pytest.fixture
+    def path_bins(self, monkeypatch):
+        def setup(executables, existing=()):
+            monkeypatch.setattr('thefuck.learned.get_all_executables',
+                                lambda: list(executables))
+            monkeypatch.setattr('thefuck.learned.which',
+                                lambda token: token in existing)
+        return setup
+
+    def test_fixes_head_of_every_pipe_segment(self, learned, path_bins):
+        path_bins(executables=['git', 'grep', 'sed'])
+        assert (learned.guess_from_path('gi psuh | gre -i foo')
+                == 'git psuh | grep -i foo')
+
+    def test_fixes_only_segment_with_unknown_head(self, learned, path_bins):
+        path_bins(executables=['git', 'grep', 'sed'], existing=['git'])
+        assert (learned.guess_from_path('git psuh | gre -i foo')
+                == 'git psuh | grep -i foo')
+
+    def test_returns_none_when_all_heads_executable(self, learned, path_bins):
+        path_bins(executables=['git', 'grep'], existing=['git', 'grep'])
+        assert learned.guess_from_path('git psuh | grep -i foo') is None
+
+    def test_skips_ambiguous_segment_fixes_others(self, learned, path_bins):
+        path_bins(executables=['clear', 'clean', 'grep'])
+        assert (learned.guess_from_path('clea psuh | gre -i foo')
+                == 'clea psuh | grep -i foo')
+
+    def test_guesses_after_sudo_in_pipe(self, learned, path_bins):
+        path_bins(executables=['clear', 'grep'])
+        assert (learned.guess_from_path('sudo cler | gre -i foo')
+                == 'sudo clear | grep -i foo')
+
+    def test_guesses_after_sudo_flat(self, learned, path_bins):
+        path_bins(executables=['clear', 'grep', 'sed'])
+        assert learned.guess_from_path('sudo cler') == 'sudo clear'
+
+    def test_replaces_quoted_head_whole(self, learned, path_bins):
+        path_bins(executables=['clear', 'grep', 'sed'])
+        assert learned.guess_from_path('"cler" psuh') == 'clear psuh'
+
+    def test_preserves_spacing_between_words(self, learned, path_bins):
+        path_bins(executables=['clear', 'grep', 'sed'])
+        assert learned.guess_from_path('cler  psuh') == 'clear  psuh'
+
+    def test_unparseable_script_falls_back_to_flat_view(
+            self, learned, path_bins):
+        path_bins(executables=['clear', 'grep', 'sed'])
+        assert (
+            learned.guess_from_path('cler psuh; case $x in y) ;; esac')
+            == 'clear psuh; case $x in y) ;; esac')
 
 
 class TestClear(object):
