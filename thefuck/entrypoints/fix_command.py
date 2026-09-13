@@ -6,7 +6,7 @@ from .. import logs, types, const
 from ..conf import settings
 from ..corrector import get_corrected_commands
 from ..exceptions import EmptyCommand
-from ..learned import get_correction, record
+from ..learned import get_correction, guess_from_path, record
 from ..ui import select_command
 from ..utils import get_alias, get_all_executables
 
@@ -41,6 +41,12 @@ def fix_command(known_args):
             return
 
         learned_script = get_correction(command.script)
+        if not learned_script:
+            learned_script = guess_from_path(command.script)
+            if learned_script:
+                logs.debug("Guessed correction from $PATH: {}".format(
+                    learned_script))
+                record(command.script, learned_script)
         if learned_script:
             learned_cmd = types.CorrectedCommand(
                 script=learned_script, side_effect=None, priority=0

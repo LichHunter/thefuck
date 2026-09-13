@@ -1,15 +1,18 @@
 import pytest
-from mock import Mock, patch, call
+from mock import Mock, patch
 from thefuck.entrypoints.fix_command import fix_command
 from thefuck.types import CorrectedCommand
 
 
 @pytest.fixture
 def mock_learned(monkeypatch):
-    state = {"correction": None, "recordings": []}
+    state = {"correction": None, "guess": None, "recordings": []}
 
     def fake_get_correction(script):
         return state["correction"]
+
+    def fake_guess(script):
+        return state["guess"]
 
     def fake_record(original, corrected):
         state["recordings"].append((original, corrected))
@@ -17,7 +20,12 @@ def mock_learned(monkeypatch):
     monkeypatch.setattr(
         "thefuck.entrypoints.fix_command.get_correction", fake_get_correction
     )
-    monkeypatch.setattr("thefuck.entrypoints.fix_command.record", fake_record)
+    monkeypatch.setattr(
+        "thefuck.entrypoints.fix_command.guess_from_path", fake_guess
+    )
+    monkeypatch.setattr(
+        "thefuck.entrypoints.fix_command.record", fake_record
+    )
     return state
 
 
@@ -73,6 +81,41 @@ class TestLearnedAutoApply(object):
             assert mock_show.call_count == 1
             shown_cmd = mock_show.call_args[0][0]
             assert shown_cmd.script == "git push origin main"
+
+
+class TestGuessAutoApply(object):
+    def test_guess_records_and_auto_applies(
+        self, mock_learned, known_args, settings, monkeypatch
+    ):
+        mock_learned["guess"] = "git push origin main"
+        get_corrected = Mock()
+        monkeypatch.setattr(
+            "thefuck.entrypoints.fix_command.get_corrected_commands", get_corrected
+        )
+
+        with patch("thefuck.types.CorrectedCommand.run") as mock_run, patch(
+            "thefuck.logs.show_corrected_command"
+        ):
+            fix_command(known_args)
+            mock_run.assert_called_once()
+            get_corrected.assert_not_called()
+            assert mock_learned["recordings"] == [
+                ("git psuh origin main", "git push origin main")
+            ]
+
+    def test_exact_learned_wins_over_guess(
+        self, mock_learned, known_args, settings, monkeypatch
+    ):
+        mock_learned["correction"] = "git push --force origin main"
+        mock_learned["guess"] = "git push origin main"
+
+        with patch("thefuck.types.CorrectedCommand.run"), patch(
+            "thefuck.logs.show_corrected_command"
+        ) as mock_show:
+            fix_command(known_args)
+            shown_cmd = mock_show.call_args[0][0]
+            assert shown_cmd.script == "git push --force origin main"
+            assert mock_learned["recordings"] == []
 
 
 class TestRecordOnSelection(object):

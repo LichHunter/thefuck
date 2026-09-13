@@ -2,8 +2,10 @@ import atexit
 import os
 import shelve
 import time
+from difflib import get_close_matches
 
 from . import logs
+from .utils import get_all_executables, which
 
 try:
     import dbm
@@ -16,6 +18,9 @@ except ImportError:
         _shelve_open_error = (anydbm.error,)
     except ImportError:
         _shelve_open_error = ()
+
+
+GUESS_CUTOFF = 0.8
 
 
 class LearnedCorrections(object):
@@ -137,6 +142,32 @@ class LearnedCorrections(object):
 
         return None
 
+    def guess_from_path(self, script):
+        """Guesses what the user meant by fuzzy-matching a mistyped
+        token against executables from $PATH and shell aliases.
+
+        Returns the corrected script only when exactly one unambiguous
+        close match exists, so asking the user stays the last resort.
+        """
+        parts = script.split()
+        if not parts:
+            return None
+
+        index = 1 if len(parts) > 1 and parts[0] == 'sudo' else 0
+        token = parts[index]
+        if '/' in token or '.' in token or which(token):
+            return None
+
+        candidates = [cmd for cmd in get_close_matches(
+            token, get_all_executables(), n=5, cutoff=GUESS_CUTOFF)
+            if cmd.startswith(token[0])]
+        if len(candidates) != 1:
+            return None
+
+        corrected_parts = list(parts)
+        corrected_parts[index] = candidates[0]
+        return ' '.join(corrected_parts)
+
     def clear(self):
         db = self.db
         for key in list(db.keys()):
@@ -154,4 +185,5 @@ _learned = LearnedCorrections()
 
 record = _learned.record
 get_correction = _learned.get_correction
+guess_from_path = _learned.guess_from_path
 clear = _learned.clear

@@ -108,6 +108,58 @@ class TestGetCorrection(object):
         assert learned.get_correction("sl") == "ls"
 
 
+class TestGuessFromPath(object):
+    @pytest.fixture
+    def path_bins(self, monkeypatch):
+        def setup(executables, existing=()):
+            monkeypatch.setattr('thefuck.learned.get_all_executables',
+                                lambda: list(executables))
+            monkeypatch.setattr('thefuck.learned.which',
+                                lambda token: token in existing)
+        return setup
+
+    def test_guesses_unique_close_match(self, learned, path_bins):
+        path_bins(executables=['clear', 'grep', 'sed'])
+        assert learned.guess_from_path('cler') == 'clear'
+
+    def test_keeps_arguments(self, learned, path_bins):
+        path_bins(executables=['python', 'pydoc', 'grep'])
+        assert (learned.guess_from_path('pyhton script.py')
+                == 'python script.py')
+
+    def test_returns_none_when_ambiguous(self, learned, path_bins):
+        path_bins(executables=['clear', 'clean'])
+        assert learned.guess_from_path('clea') is None
+
+    def test_returns_none_when_token_is_executable(self, learned, path_bins):
+        path_bins(executables=['clear'], existing=['clear'])
+        assert learned.guess_from_path('clear') is None
+
+    def test_returns_none_for_path_like_token(self, learned, path_bins):
+        path_bins(executables=['git', 'grep', 'sed'])
+        assert learned.guess_from_path('./gti push') is None
+
+    def test_returns_none_for_token_with_extension(self, learned, path_bins):
+        path_bins(executables=['git', 'grep', 'sed'])
+        assert learned.guess_from_path('giti.py x') is None
+
+    def test_returns_none_when_first_char_differs(self, learned, path_bins):
+        path_bins(executables=['top'])
+        assert learned.guess_from_path('htop') is None
+
+    def test_returns_none_below_cutoff(self, learned, path_bins):
+        path_bins(executables=['grep', 'sed', 'awk'])
+        assert learned.guess_from_path('total') is None
+
+    def test_guesses_after_sudo(self, learned, path_bins):
+        path_bins(executables=['clear', 'grep', 'sed'])
+        assert learned.guess_from_path('sudo cler') == 'sudo clear'
+
+    def test_returns_none_for_empty_script(self, learned, path_bins):
+        path_bins(executables=['git'])
+        assert learned.guess_from_path('') is None
+
+
 class TestClear(object):
     def test_removes_all_entries(self, learned):
         learned.record("git psuh", "git push")
