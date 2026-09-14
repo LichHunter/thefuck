@@ -1,5 +1,6 @@
 import pytest
 from mock import Mock, patch
+from thefuck import danger as real_danger
 from thefuck.entrypoints.fix_command import fix_command
 from thefuck.types import CorrectedCommand
 
@@ -8,6 +9,14 @@ from thefuck.types import CorrectedCommand
 def mock_learned(monkeypatch):
     state = {"correction": None, "guess": None, "history": None,
              "help": None, "recordings": [], "calls": []}
+    # The real gate fail-safes to True without bashlex, which would
+    # make every auto-apply test platform-dependent; the danger
+    # override tests re-install the real module.
+    fake_danger = Mock()
+    fake_danger.is_dangerous.return_value = False
+    monkeypatch.setattr(
+        "thefuck.entrypoints.fix_command.danger", fake_danger
+    )
 
     def fake_get_correction(script):
         state["calls"].append("correction")
@@ -121,7 +130,7 @@ class TestGuessAutoApply(object):
     def test_exact_learned_wins_over_guess(
         self, mock_learned, known_args, settings, monkeypatch
     ):
-        mock_learned["correction"] = "git push --force origin main"
+        mock_learned["correction"] = "git push origin dev"
         mock_learned["guess"] = "git push origin main"
 
         with patch("thefuck.types.CorrectedCommand.run"), patch(
@@ -129,7 +138,7 @@ class TestGuessAutoApply(object):
         ) as mock_show:
             fix_command(known_args)
             shown_cmd = mock_show.call_args[0][0]
-            assert shown_cmd.script == "git push --force origin main"
+            assert shown_cmd.script == "git push origin dev"
             assert mock_learned["recordings"] == []
 
 
@@ -212,6 +221,40 @@ class TestResolverAutoApply(object):
             assert mock_learned["recordings"] == [
                 ("git psuh origin main", "git push origin main")
             ]
+
+
+class TestDangerOverride(object):
+    @pytest.mark.parametrize(
+        "hit_source", ["correction", "history", "guess", "help"])
+    def test_dangerous_hit_asks_instead_of_auto_running(
+        self, mock_learned, known_args, settings, monkeypatch, hit_source
+    ):
+        # The real gate: a danger-flagged candidate from ANY source —
+        # a seeded learned-db exact hit included — reaches
+        # select_command and nothing auto-runs. The abort via the
+        # mocked selection keeps the pin free of terminal IO.
+        monkeypatch.setattr(
+            "thefuck.entrypoints.fix_command.danger", real_danger
+        )
+        mock_learned[hit_source] = "rm -rf /"
+        select = Mock(return_value=None)
+        monkeypatch.setattr(
+            "thefuck.entrypoints.fix_command.get_corrected_commands",
+            lambda _: iter([]),
+        )
+        monkeypatch.setattr(
+            "thefuck.entrypoints.fix_command.select_command", select
+        )
+
+        with patch("thefuck.types.CorrectedCommand.run") as mock_run, patch(
+            "thefuck.logs.show_corrected_command"
+        ) as mock_show:
+            with pytest.raises(SystemExit):
+                fix_command(known_args)
+
+        select.assert_called_once()
+        mock_run.assert_not_called()
+        mock_show.assert_not_called()
 
 
 class TestRecordOnSelection(object):

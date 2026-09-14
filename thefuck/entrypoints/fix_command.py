@@ -2,7 +2,7 @@ from pprint import pformat
 import os
 import sys
 from difflib import SequenceMatcher
-from .. import logs, types, const
+from .. import danger, logs, types, const
 from ..conf import settings
 from ..corrector import get_corrected_commands
 from ..exceptions import EmptyCommand
@@ -61,6 +61,10 @@ def fix_command(known_args):
                 logs.debug("Corrected from binary help: {}".format(
                     learned_script))
                 record(command.script, learned_script)
+        if learned_script and danger.is_dangerous(learned_script):
+            logs.debug("Refusing to auto-run dangerous correction, "
+                       "asking instead: {}".format(learned_script))
+            learned_script = None
         if learned_script:
             learned_cmd = types.CorrectedCommand(
                 script=learned_script, side_effect=None, priority=0

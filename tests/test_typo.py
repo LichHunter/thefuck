@@ -1,4 +1,8 @@
-from thefuck.typo import single_edit
+from difflib import SequenceMatcher
+
+from thefuck.typo import floor_ok, single_edit
+
+_LEN30 = 'abcdefghijklmnopqrstuvwxyz0123'
 
 
 class TestSubstitution(object):
@@ -82,3 +86,57 @@ class TestBoundaries(object):
         # amended gate still declines it.
         assert not single_edit('--ignore-whitespaces',
                                '--ignore-all-spaces')
+
+
+class TestFloorOk(object):
+    def test_len3_floor_passes(self):
+        # max length 3 -> floor max(0.6, 1 - 3/3) = 0.6; the plain
+        # substitution scores 2 * 2 / 6 = 0.667.
+        assert SequenceMatcher(None, 'abc', 'abz').ratio() >= 0.6
+        assert floor_ok('abc', 'abz')
+
+    def test_len3_below_floor_declines(self):
+        # Two substitutions score 0.333, under the 0.6 floor.
+        assert SequenceMatcher(None, 'axx', 'ayy').ratio() < 0.6
+        assert not floor_ok('axx', 'ayy')
+
+    def test_len10_floor_passes(self):
+        # max length 10 -> floor 1 - 3/10 = 0.7; three trailing
+        # substitutions keep 7 matches: exactly 2 * 7 / 20 = 0.7.
+        assert SequenceMatcher(
+            None, 'abcdefghij', 'abcdefgxyz').ratio() >= 0.7
+        assert floor_ok('abcdefghij', 'abcdefgxyz')
+
+    def test_len10_below_floor_declines(self):
+        # Four trailing substitutions score 0.6, under 0.7.
+        assert SequenceMatcher(
+            None, 'abcdefghij', 'abcdefwxyz').ratio() < 0.7
+        assert not floor_ok('abcdefghij', 'abcdefwxyz')
+
+    def test_len30_floor_passes(self):
+        # max length 30 -> floor 1 - 3/30 = 0.9; three trailing
+        # substitutions keep 27 matches: exactly 2 * 27 / 60 = 0.9.
+        assert SequenceMatcher(
+            None, _LEN30, _LEN30[:27] + '456').ratio() >= 0.9
+        assert floor_ok(_LEN30, _LEN30[:27] + '456')
+
+    def test_len30_below_floor_declines(self):
+        # Four trailing substitutions score ~0.867, under 0.9.
+        assert SequenceMatcher(
+            None, _LEN30, _LEN30[:26] + '4567').ratio() < 0.9
+        assert not floor_ok(_LEN30, _LEN30[:26] + '4567')
+
+    def test_single_edit_always_passes(self):
+        assert floor_ok('gti', 'git')
+        assert floor_ok('psuh', 'push')
+        assert floor_ok('clea', 'clear')
+        assert floor_ok('clear', 'clea')
+
+    def test_first_char_mismatch_always_fails(self):
+        # The first-letter guard holds for the ratio path and the
+        # single-edit path alike.
+        assert SequenceMatcher(None, 'abcd', 'zbcd').ratio() >= 0.6
+        assert not floor_ok('abcd', 'zbcd')
+        assert single_edit('abz', 'bbz')
+        assert not floor_ok('abz', 'bbz')
+        assert not floor_ok('ls', 'sl')

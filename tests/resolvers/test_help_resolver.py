@@ -96,19 +96,29 @@ def test_returns_correction_when_subcommand_misspelled(
 
 
 def test_corrects_transposed_subcommand(fake_bin, argv_log, enable_cache):
-    # bulid -> build scores 2 * 4 / 10 = 0.8, right at the cutoff,
-    # and is also a single transposition (li <-> il).
+    # bulid -> build is a single adjacent transposition (li <-> il),
+    # so the length-scaled floor admits it on the single-edit path.
     fake_bin('fake')
     assert get_help_correction('fake bulid .') == 'fake build .'
     assert typo.single_edit('bulid', 'build')
 
 
-def test_corrects_transposition_under_cutoff(
+def test_corrects_transposition_via_single_edit(
         fake_bin, argv_log, enable_cache):
-    # psuh -> push scores 2 * 3 / 8 = 0.75, under the cutoff, so only
-    # the first-char-equal single-edit match fixes it.
+    # psuh -> push scores 2 * 3 / 8 = 0.75, so only the single-edit
+    # path of the floor admits it.
     fake_bin('fake', commands=('push', 'build', 'clean'))
     assert get_help_correction('fake psuh x') == 'fake push x'
+
+
+def test_declines_subcommand_below_scaled_floor(
+        fake_bin, argv_log, enable_cache):
+    # 10-char subcommand vs the listed 'burnno1234' scores
+    # 2 * 6 / 20 = 0.6, under the len-10 floor 0.7, and is not a
+    # single edit; no listed subcommand is close enough.
+    fake_bin('fake', commands=('burnno1234', 'build', 'clean'))
+    assert get_help_correction('fake burnnoabcd') is None
+    assert _spawned(argv_log) == ['--help']
 
 
 def test_respawns_when_binary_mtime_changes(

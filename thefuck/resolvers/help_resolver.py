@@ -16,15 +16,12 @@ Personal fork only: depends on bashlex (GPL-3+), do not distribute.
 """
 import os
 import subprocess
-from difflib import get_close_matches
 
 from thefuck import shell_ast, typo
 from thefuck.utils import cache, which
 
 
-_CUTOFF = 0.8
 _TIMEOUT = 2
-_MATCHES = 5
 _SECTION_HEADERS = ('Commands:', 'Management Commands:',
                     'Available Commands:')
 
@@ -72,15 +69,10 @@ def _token_replacement(word, binary_name, binary_path):
     token, start, end = word
     if token in commands:
         return None
-    # Same gate shape as learned.guess_from_path: difflib candidates
-    # plus same-first-char single edits (transpositions score under
-    # the cutoff), exactly one distinct survivor.
-    matches = set(match for match in get_close_matches(
-        token, commands, n=_MATCHES, cutoff=_CUTOFF)
-        if match.startswith(token[0]))
-    matches.update(command for command in commands
-                   if command[:1] == token[:1]
-                   and typo.single_edit(token, command))
+    # Same gate shape as learned.guess_from_path: length-scaled
+    # floor (see `typo.floor_ok`), exactly one distinct survivor.
+    matches = set(command for command in commands
+                  if typo.floor_ok(token, command))
     if len(matches) != 1:
         return None
     return start, end, matches.pop()

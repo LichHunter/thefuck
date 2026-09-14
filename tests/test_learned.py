@@ -149,9 +149,23 @@ class TestGuessFromPath(object):
         path_bins(executables=['top'])
         assert learned.guess_from_path('htop') is None
 
-    def test_returns_none_below_cutoff(self, learned, path_bins):
-        path_bins(executables=['grep', 'sed', 'awk'])
-        assert learned.guess_from_path('total') is None
+    def test_returns_none_below_length_scaled_floor(self, learned,
+                                                    path_bins):
+        # 10-char token vs executable sharing only the 6 leading
+        # chars scores 2 * 6 / 20 = 0.6, under the len-10 floor 0.7,
+        # and the pair is not a single edit.
+        path_bins(executables=['burnnoabcd'])
+        assert learned.guess_from_path('burnno1234 file') is None
+
+    def test_guesses_via_ratio_above_scaled_floor(self, learned,
+                                                  path_bins):
+        # Three trailing substitutions score exactly the len-10
+        # floor 0.7 — a pair the old fixed 0.8 cutoff declined — and
+        # no other executable shares the first char, so the ratio
+        # path alone admits the match.
+        path_bins(executables=['abcdefgxyz', 'grep', 'sed'])
+        assert (learned.guess_from_path('abcdefghij file')
+                == 'abcdefgxyz file')
 
     def test_guesses_after_sudo(self, learned, path_bins):
         path_bins(executables=['clear', 'grep', 'sed'])
@@ -180,11 +194,10 @@ class TestGuessFromPathSegments(object):
         assert (learned.guess_from_path('gi psuh | gre -i foo')
                 == 'git psuh | grep -i foo')
 
-    def test_fixes_single_edit_typos_under_cutoff(self, learned,
-                                                  path_bins):
+    def test_fixes_single_edit_typos(self, learned, path_bins):
         # gti -> git scores 2 * 2 / 6 = 0.667 and greo -> grep scores
-        # 2 * 3 / 8 = 0.75, both under GUESS_CUTOFF; each is still a
-        # first-char-equal single edit with one executable match.
+        # 2 * 3 / 8 = 0.75; each is a first-char-equal single edit
+        # with one executable match.
         path_bins(executables=['git', 'grep', 'sed'])
         assert (learned.guess_from_path('gti psuh | greo -i foo')
                 == 'git psuh | grep -i foo')
