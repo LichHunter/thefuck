@@ -2,13 +2,11 @@ from pprint import pformat
 import os
 import sys
 from difflib import SequenceMatcher
-from .. import danger, logs, types, const
+from .. import compose, const, danger, learned, logs, types
 from ..conf import settings
 from ..corrector import get_corrected_commands
 from ..exceptions import EmptyCommand
-from ..learned import get_correction, guess_from_path, record
-from ..resolvers.help_resolver import get_help_correction
-from ..resolvers.history_resolver import get_history_correction
+from ..shells import Nushell, shell
 from ..ui import select_command
 from ..utils import get_alias, get_all_executables
 
@@ -29,6 +27,33 @@ def _get_raw_command(known_args):
     return []
 
 
+def _run_learned(command, corrected, steps):
+    """Runs an auto-applied correction, learning from the outcome.
+
+    Under `settings.repeat` or a non-nushell parent shell the outcome
+    cannot be observed (the script goes to the parent shell or a
+    child `thefuck --repeat` process), so today's behavior stands:
+    record immediately before the run, unless the composition only
+    replayed a learned-db exact hit. Under nushell the db is closed
+    before the run (so the child can safely open its own) and the
+    fix is remembered only when the command succeeds — a failing
+    fix is forgotten again.
+    """
+    replayed_learned_only = (len(steps) == 1
+                             and steps[0][0] == compose.LEARNED_SOURCE)
+    if settings.repeat or not isinstance(shell, Nushell):
+        if not replayed_learned_only:
+            learned.record(command.script, corrected.script)
+        corrected.run(command)
+        return
+    learned.close_db()
+    corrected.run(command)
+    if corrected.returncode == 0:
+        learned.record(command.script, corrected.script)
+    else:
+        learned.forget(command.script, corrected.script)
+
+
 def fix_command(known_args):
     """Fixes previous command. Used when `thefuck` called without arguments."""
     settings.init(known_args)
@@ -42,42 +67,29 @@ def fix_command(known_args):
             logs.debug("Empty command, nothing to do")
             return
 
-        learned_script = get_correction(command.script)
-        if not learned_script:
-            learned_script = get_history_correction(command)
-            if learned_script:
-                logs.debug("Corrected from history: {}".format(
-                    learned_script))
-                record(command.script, learned_script)
-        if not learned_script:
-            learned_script = guess_from_path(command.script)
-            if learned_script:
-                logs.debug("Guessed correction from $PATH: {}".format(
-                    learned_script))
-                record(command.script, learned_script)
-        if not learned_script:
-            learned_script = get_help_correction(command.script)
-            if learned_script:
-                logs.debug("Corrected from binary help: {}".format(
-                    learned_script))
-                record(command.script, learned_script)
-        if learned_script and danger.is_dangerous(learned_script):
+        learned_script, steps = compose.resolve(command)
+        if learned_script is not None \
+                and danger.is_dangerous(learned_script):
+            # Belt and suspenders: the composer already declines
+            # dangerous candidates; this guards against regressions.
             logs.debug("Refusing to auto-run dangerous correction, "
                        "asking instead: {}".format(learned_script))
             learned_script = None
-        if learned_script:
+        if learned_script is not None:
+            for source, step in steps:
+                logs.debug("Composed via {}: {}".format(source, step))
             learned_cmd = types.CorrectedCommand(
                 script=learned_script, side_effect=None, priority=0
             )
             logs.show_corrected_command(learned_cmd)
-            learned_cmd.run(command)
+            _run_learned(command, learned_cmd, steps)
             return
 
         corrected_commands = get_corrected_commands(command)
         selected_command = select_command(corrected_commands)
 
         if selected_command:
-            record(command.script, selected_command.script)
+            learned.record(command.script, selected_command.script)
             selected_command.run(command)
         else:
             sys.exit(1)

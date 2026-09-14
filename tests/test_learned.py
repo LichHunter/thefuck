@@ -261,6 +261,95 @@ class TestClear(object):
         assert learned.get_correction("git psuh") is None
 
 
+class TestForget(object):
+    def test_removes_cmd_and_derived_part_entries(self, learned):
+        learned.record("git psuh origin main", "git push origin main")
+        learned.forget("git psuh origin main", "git push origin main")
+        assert "cmd:git psuh origin main" not in learned.db
+        assert "part:git:psuh" not in learned.db
+
+    def test_removes_cmd_and_derived_word_entry(self, learned):
+        learned.record("pyhton script.py", "python script.py")
+        learned.forget("pyhton script.py", "python script.py")
+        assert "cmd:pyhton script.py" not in learned.db
+        assert "word:pyhton" not in learned.db
+
+    def test_removes_every_diverged_position(self, learned):
+        learned.record("gti comit -m msg", "git commit -m msg")
+        learned.forget("gti comit -m msg", "git commit -m msg")
+        assert "cmd:gti comit -m msg" not in learned.db
+        assert "word:gti" not in learned.db
+        assert "part:git:comit" not in learned.db
+
+    def test_deletes_rather_than_decrements(self, learned):
+        for _ in range(3):
+            learned.record("git psuh", "git push")
+        learned.forget("git psuh", "git push")
+        assert "cmd:git psuh" not in learned.db
+        assert "part:git:psuh" not in learned.db
+
+    def test_keeps_unrelated_entries(self, learned):
+        learned.record("git psuh", "git push")
+        learned.record("pyhton x.py", "python x.py")
+        learned.forget("git psuh", "git push")
+        assert "cmd:pyhton x.py" in learned.db
+        assert "word:pyhton" in learned.db
+
+    def test_mismatched_token_counts_forgets_cmd_only(self, learned):
+        learned.record("git push", "git push --set-upstream origin main")
+        learned.forget("git push", "git push --set-upstream origin main")
+        assert "cmd:git push" not in learned.db
+        assert not any(k.startswith(("word:", "part:"))
+                       for k in learned.db)
+
+    def test_assembly_failure_is_a_noop(self, learned):
+        # "gti comit" resolves by assembling word:gti alone (no cmd:
+        # entry of its own); those mappings were validated by an
+        # earlier success of a different command and must stand.
+        learned.record("gti push", "git push")
+        assert learned.get_correction("gti comit") == "git comit"
+        learned.forget("gti comit", "git comit")
+        assert "word:gti" in learned.db
+        assert "cmd:gti comit" not in learned.db
+
+    def test_unknown_command_is_a_noop(self, learned):
+        learned.forget("never recorded", "anything at all")
+        assert len(learned.db) == 0
+
+
+class TestCloseDb(object):
+    def test_close_sets_db_none_and_is_idempotent(self, learned):
+        learned.record("git psuh", "git push")
+        learned.close_db()
+        assert learned._db is None
+        learned.close_db()
+        assert learned._db is None
+
+    def test_reopen_after_close_still_finds_entries(
+            self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+        lc = LearnedCorrections()
+        lc.record("git psuh", "git push")
+        first_handle = lc._db
+        lc.close_db()
+        assert lc.get_correction("git psuh") == "git push"
+        assert lc._db is not None
+        assert lc._db is not first_handle
+
+    def test_atexit_binds_close_db_once_across_reopens(
+            self, tmp_path, monkeypatch):
+        registrations = []
+        monkeypatch.setattr(
+            "thefuck.learned.atexit.register", registrations.append)
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+        lc = LearnedCorrections()
+        lc.record("git psuh", "git push")
+        lc.close_db()
+        lc.record("gti comit -m msg", "git commit -m msg")
+        lc.close_db()
+        assert registrations == [lc.close_db]
+
+
 class TestRoundTrip(object):
     def test_record_then_match(self, learned):
         learned.record("docker bilud .", "docker build .")

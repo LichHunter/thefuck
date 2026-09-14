@@ -1,0 +1,134 @@
+Task 3 — Fixpoint composer + outcome-gated learning
+===================================================
+Plan: .omo/plans/intelligent-correction.md (todo 3), HEAD before: 58f6cca
+Commit after: <filled at commit time>
+
+What landed
+-----------
+- thefuck/compose.py (new, 101 pure LOC): resolve(command) ->
+  (final_script_or_None, steps). Sources consulted per round in order
+  [learned-db exact, error-suggestion, history, path guess, help];
+  first candidate passing danger.is_dangerous wins the round
+  (dangerous candidates declined, consultation continues).
+  Output-aware sources (error_suggestion, history) receive a
+  synthesized types.Command(script=round_script, output=original).
+  Acceptance: candidate == current -> STOP stable; candidate in
+  visited -> STOP-ABORT (None, steps); else advance. Round with no
+  acceptable candidate -> STOP. ZERO accepted steps (round-1
+  no-candidate, round-1 candidate == original) -> (None, steps):
+  the original failing script is NEVER auto-executed. NO round cap.
+  Termination contract stated in the module docstring (visited-set
+  kills cycles; sources must be fixed-range or word-count-preserving,
+  appending sources forbidden). Compose-local memo dict per
+  (source, input-script) is a determinism TRIPWIRE (assert never hit)
+  — pinned by test_no_source_input_ever_repeats (4-round chain, all
+  (source, script) calls distinct).
+- thefuck/entrypoints/fix_command.py: inline resolver chain replaced
+  by compose.resolve (learned-db lookup is source #1 INSIDE the
+  composer, no separate short-circuit). None -> rules+ask unchanged.
+  Belt-and-suspenders danger check kept before the auto-run.
+  _run_learned(): settings.repeat OR non-Nushell -> record(original,
+  final) exactly once immediately BEFORE run when >=1 step accepted,
+  except a win whose ONLY step was the learned-db exact hit (no
+  re-record; mirrors today, preserves test_exact_learned_wins_over_
+  guess). Nushell + no-repeat -> learned.close_db(), run,
+  returncode==0 -> record else learned.forget(original, final) —
+  the poison self-heal path (no carve-out: a failing learned exact
+  hit MUST forget, pinned by test_learned_replay_failure_still_
+  forgets). Ask-path record keeps today's record-immediately
+  behavior. Pre-existing hazard documented not fixed: under repeat
+  the spawned child may hit the parent's open shelve, silently
+  degraded via the {} fallback (learned.py _init_db).
+- thefuck/types.py: CorrectedCommand.run nushell branch stashes
+  subprocess.run(...).returncode on the instance (2-line change).
+- thefuck/learned.py: forget(original, corrected) — exact inverse of
+  record: deletes cmd:original; when token counts match deletes
+  word:<orig_parts[0]> and part:<corrected_parts[0]>:<orig_tok> for
+  diverged positions (part: keys require the corrected head —
+  hence arg 2); delete, not decrement; assembly failures (no cmd:
+  key) are a documented NO-OP (word:/part: mappings were validated
+  by a prior success of a different command and stand). close_db():
+  idempotent, closes shelve if open, sets _db None ({} fallback has
+  no close — guarded). atexit now registers the STABLE close_db
+  METHOD once (instance flag) instead of the stale-prone
+  _db.close object.
+
+Authorized test migration (mandated by plan todo 3)
+---------------------------------------------------
+tests/entrypoints/test_fix_command_learned.py rewritten:
+- fixture patches compose.* source names (chain moved into the
+  composer) and fix_command.learned (Mock record/forget/close_db
+  with order tracking); danger patched in BOTH fix_command and
+  compose with the same fake, real_danger reinstalled in both for
+  the override tests (now parametrized over 'suggestion' too).
+- fakes made INPUT-AWARE (constant candidates returned only for the
+  original script, None otherwise) so round 2 declines — exactly the
+  plan's prescribed fix for test_exact_learned_wins_over_guess
+  (recordings == [] preserved).
+- TestResolverChainOrder rebased to per-round consultation incl.
+  error-suggestion: help-only hit -> [learned, error-suggestion,
+  history, path, help] x2 rounds; earlier hits -> round-1 prefix +
+  full round-2 decline; all-decline fallthrough -> 5 calls.
+
+Test results (all red-first: compose/learned/entrypoint suites
+failed with ImportError/AttributeError before implementation)
+-----------------------------------------------------------------
+- tests/test_compose.py: 14 passed
+- tests/test_learned.py: 57 passed (46 prior + 11 new:
+  TestForget x8, TestCloseDb x3)
+- tests/entrypoints/test_fix_command_learned.py: 28 passed
+- combined target: pytest tests/test_compose.py tests/test_learned.py
+  tests/entrypoints/ -q -> 183 passed
+- FULL suite: pytest tests/ -q --ignore=tests/functional ->
+  2200 passed, 16 skipped
+- flake8 clean on all 7 touched files
+- pure LOC: compose.py 101, fix_command.py 82, learned.py 201,
+  types.py 214 — all <= 250
+- py2.7 grammar proof: lib2to3 (py2 grammar) parses all 7 files OK
+  (no f-strings / py3-only syntax)
+
+Acceptance pins (plan todo 3, all present)
+------------------------------------------
+- two-round composition -> single composite (test_compose
+  TestComposition + entrypoint TestComposition)
+- round-1 NO candidate -> None -> reaches select_command, original
+  NOT executed (TestNoAutoRunOfOriginal + TestFallthrough +
+  entrypoint DangerOverride/fallthrough paths; most common path)
+- round-1 candidate == original -> None (pinned)
+- cycle fixture A<->B -> (None, steps) -> rules+ask, nothing
+  executed (TestAbort)
+- original-script re-entry in round 2 -> abort-to-ask (pinned)
+- synthesized-Command threading: mocked sources assert exact
+  Command(script=round_composite, output=original_output) sequence
+  per round (misleading_success_output class: exact call-arg asserts)
+- returncode 1 -> forget removes seeded cmd: + derived word:/part:,
+  nothing recorded (entrypoint TestOutcomeLearning + learned
+  TestForget with db dumps)
+- assembly failure (word:-only, no cmd:) -> forget no-op (pinned)
+- returncode 0 -> recorded; non-nushell/repeat -> record regardless,
+  before run (pinned with order == ["record", "run"])
+- close_db idempotent + atexit registered once across reopens
+  (registration count asserted == [lc.close_db])
+- memo tripwire never hits (assert inside _round + dedicated test)
+- stale_state: TestCloseDb uses fresh tmp XDG_CACHE_HOME per test
+
+Live sanity (real sources, seeded dict db, controlled PATH)
+----------------------------------------------------------
+resolve(Command("gti psuh", git-not-a-command output)) with
+cmd:gti psuh -> "git psuh" and part:git:psuh -> "push" seeded:
+final == "git push", steps == [('learned', 'git psuh'),
+('learned', 'git push')] — round 2 resolved via part:-assembly,
+composition to a fixpoint confirmed with real resolver code.
+
+Risks / notes
+-------------
+- Under settings.repeat the child `thefuck --repeat` may hit the
+  parent's open shelve: pre-existing, silently degraded via the {}
+  fallback (documented, not fixed — per plan).
+- forget's word:/part: deletion is exact-inverse-of-record; under
+  cross-record interference (a later record overwriting word: for
+  the same orig token) the later mapping is deleted too — accepted
+  by the plan's literal inverse semantics.
+- Nushell outcome gating is new behavior: on success a learned-only
+  replay now re-records (count bump), on failure it forgets —
+  required for poison self-heal.

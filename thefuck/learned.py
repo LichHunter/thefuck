@@ -22,6 +22,7 @@ except ImportError:
 class LearnedCorrections(object):
     def __init__(self):
         self._db = None
+        self._exit_registered = False
 
     def _init_db(self):
         try:
@@ -42,7 +43,11 @@ class LearnedCorrections(object):
                 if os.path.exists(path):
                     os.remove(path)
             self._db = shelve.open(cache_path)
-        atexit.register(self._db.close)
+        # Bind the stable close_db method, not the current _db.close
+        # object: it would go stale after a close/reopen cycle.
+        if not self._exit_registered:
+            atexit.register(self.close_db)
+            self._exit_registered = True
 
     @staticmethod
     def _get_cache_dir():
@@ -173,6 +178,57 @@ class LearnedCorrections(object):
             return None
         return shell_ast.splice(script, replacements)
 
+    def forget(self, original_script, corrected_script):
+        """Removes what `record(original, corrected)` stored.
+
+        The exact inverse of `record`: deletes the `cmd:` entry and,
+        when token counts match, the `word:`/`part:` mappings for
+        every diverged position (`part:` keys live under the
+        corrected head, hence the second argument). A correction that
+        was assembled from `word:`/`part:` lookups alone — no `cmd:`
+        entry of its own — is a documented no-op: those mappings were
+        validated by a prior success of a different command and
+        stand.
+        """
+        db = self.db
+        full_key = "cmd:" + original_script
+        if full_key not in db:
+            return
+        del db[full_key]
+
+        original_parts = original_script.split()
+        corrected_parts = corrected_script.split()
+        if not (original_parts and corrected_parts
+                and len(original_parts) == len(corrected_parts)):
+            self._sync()
+            return
+        for i, (orig_tok, corr_tok) in enumerate(
+                zip(original_parts, corrected_parts)):
+            if orig_tok == corr_tok:
+                continue
+            if i == 0:
+                key = "word:" + orig_tok
+            else:
+                key = "part:" + corrected_parts[0] + ":" + orig_tok
+            if key in db:
+                del db[key]
+        self._sync()
+
+    def close_db(self):
+        """Closes the learned db when open; safe to call repeatedly.
+
+        The next access reopens it, so the run of a corrected command
+        can happen with the shelve closed (a `--repeat` child process
+        would otherwise hit the parent's open handle).
+        """
+        if self._db is not None:
+            try:
+                self._db.close()
+            except Exception:
+                # The degraded {} fallback has no close.
+                logs.debug("Unable to close learned-corrections db")
+            self._db = None
+
     def clear(self):
         db = self.db
         for key in list(db.keys()):
@@ -191,4 +247,6 @@ _learned = LearnedCorrections()
 record = _learned.record
 get_correction = _learned.get_correction
 guess_from_path = _learned.guess_from_path
+forget = _learned.forget
+close_db = _learned.close_db
 clear = _learned.clear

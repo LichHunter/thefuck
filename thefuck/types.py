@@ -264,6 +264,7 @@ class CorrectedCommand(object):
         if isinstance(shell, Nushell):
             # TODO: fix for better option, the lack of '-l' flag
             # means we lose any ENV that could be needed
-            subprocess.run(["nu", "-c", script])
+            self.returncode = subprocess.run(
+                ["nu", "-c", script]).returncode
         else:
             sys.stdout.write(script)
