@@ -90,6 +90,7 @@
           packages = with pkgs; [
             uv
             gh
+            opencode
           ] ++ [ python ];
           env = {
             UV_NO_SYNC = "1";
